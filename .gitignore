@@ -1,0 +1,6 @@
+# move
+*build
+build.log
+
+# aptos
+*.aptos/
