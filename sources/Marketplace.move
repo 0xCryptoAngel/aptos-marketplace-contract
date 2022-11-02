@@ -1,5 +1,4 @@
 module lotus::Marketplace {
-    // @module false
 
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_framework::coin::{Self, Coin};
@@ -96,6 +95,7 @@ module lotus::Marketplace {
         changing_price_events: EventHandle<ChangePriceEvent>
     }
 
+    // auction mode
     struct AuctionItem has key, store {
         min_selling_price: u64,
         auction_id: u64,
@@ -120,7 +120,10 @@ module lotus::Marketplace {
         min_selling_price: u64,
         duration: u64,
         started_at:u64,
-        owner_address: address
+        owner_address: address,
+        royalty_payee: address,
+        royalty_numerator: u64,
+        royalty_denominator: u64
     }
 
     // Set of data sent to the event stream during a bidding for a token
@@ -129,7 +132,7 @@ module lotus::Marketplace {
         auction_id: u64,
         timestamp: u64,
         bid: u64,
-        bider_address: address
+        bidder_address: address
     }
 
     struct AuctionData has key {
@@ -145,8 +148,8 @@ module lotus::Marketplace {
         timestamp: u64,
         amount: u64,
         offer_id: u64,
-        started_at: u64, //miliseconds
-        duration: u64 //miliseconds
+        started_at: u64, // seconds enough
+        duration: u64 // seconds enough
     }
 
     struct ClaimCoinsEvent has store, drop {
@@ -160,9 +163,10 @@ module lotus::Marketplace {
         id: TokenId,
         auction_id: u64,
         timestamp: u64,
-        bider_address: address
+        bidder_address: address
     }
 
+    // offer mode
     struct OfferItem has key, store {
         offerers: vector<Offerer>,
         token: Option<TokenId>,
@@ -186,7 +190,10 @@ module lotus::Marketplace {
         offerer: address,
         amount: u64,
         started_at: u64,
-        duration: u64
+        duration: u64,
+        royalty_payee: address,
+        royalty_numerator: u64,
+        royalty_denominator: u64
     }
 
     struct AcceptOfferEvent has store, drop {
@@ -219,6 +226,7 @@ module lotus::Marketplace {
         cancel_offer_events: EventHandle<CancelOfferEvent>
     }
 
+    // publish contract && initial resource
     public entry fun initial_market_script(sender: &signer) {
         let sender_addr = signer::address_of(sender);
         let (market_signer, market_cap) = account::create_resource_account(sender, x"01");
@@ -278,7 +286,6 @@ module lotus::Marketplace {
         let sender_addr = signer::address_of(sender);
         let market_cap = &borrow_global<TokenCap>(@lotus).cap;
         let market_signer = &account::create_signer_with_capability(market_cap);
-
         let market_signer_address = signer::address_of(market_signer);
 
         let token = token::withdraw_token(sender, token_id, 1);
@@ -290,7 +297,9 @@ module lotus::Marketplace {
         let royalty_numerator = token::get_royalty_numerator(&royalty);
         let royalty_denominator = token::get_royalty_denominator(&royalty);
 
+        // get unique id
         let guid = account::create_guid(market_signer);
+        let listing_id = guid::creation_num(&guid);
 
         event::emit_event<ListEvent>(
             &mut listed_items_data.listing_events,
@@ -299,7 +308,7 @@ module lotus::Marketplace {
                 amount: price,
                 seller_address: sender_addr,
                 timestamp: timestamp::now_seconds(),
-                listing_id: guid::creation_num(&guid),
+                listing_id,
                 royalty_payee,
                 royalty_numerator,
                 royalty_denominator 
@@ -308,7 +317,7 @@ module lotus::Marketplace {
 
         table::add(listed_items, token_id, ListedItem {
             amount: price,
-            listing_id: guid::creation_num(&guid),
+            listing_id,
             timestamp: timestamp::now_seconds(),
             locked_token: option::some(token),
             seller_address: sender_addr
@@ -316,7 +325,7 @@ module lotus::Marketplace {
 
     }
 
-    // list script
+    // entry batch list script by token owners
     public entry fun batch_list_script(
         sender: &signer,
         creators: vector<address>,
@@ -359,7 +368,6 @@ module lotus::Marketplace {
         sender: &signer,
         token_id: TokenId
     ) acquires ListedItemsData, TokenCap {
-
         let sender_addr = signer::address_of(sender);
         let market_cap = &borrow_global<TokenCap>(@lotus).cap;
         let market_signer = &account::create_signer_with_capability(market_cap);
@@ -454,6 +462,7 @@ module lotus::Marketplace {
         let fee_listing = listed_item.amount * market_data.fee / 10000;
         let sub_amount = listed_item.amount - fee_listing - _fee_royalty;
 
+        // print
         // print<u64>(&listed_item.amount);
         // print<u64>(&market_data.fee);
         // print<u64>(&fee_listing);
@@ -487,15 +496,16 @@ module lotus::Marketplace {
         option::destroy_none(locked_token);
     }
 
+    // batch buy script
 	public entry fun batch_buy_script(
         sender: &signer,
         creators: vector<address>,
-        collections: vector<String>,
+        collection_names: vector<String>,
         token_names: vector<String>,
         property_versions: vector<u64>
     ) acquires ListedItemsData, TokenCap, MarketData {
         let length_creators = vector::length(&creators);
-        let length_collections = vector::length(&collections);
+        let length_collections = vector::length(&collection_names);
         let length_token_names = vector::length(&token_names);
         let length_properties = vector::length(&property_versions);
 
@@ -507,8 +517,8 @@ module lotus::Marketplace {
 
         while (i > 0){
             let creator = vector::pop_back(&mut creators);
+            let collection_name = vector::pop_back(&mut collection_names);
             let token_name = vector::pop_back(&mut token_names);
-            let collection_name = vector::pop_back(&mut collections);
             let property_version = vector::pop_back(&mut property_versions);
             let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
 
@@ -518,16 +528,18 @@ module lotus::Marketplace {
         }
 	}
 
+    // offer mode
+    // make offer by listing token (by buyer)
     public entry fun make_offer_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64,
         offer_amount: u64,
-        duration:u64
+        duration: u64
     ) acquires TokenCap, OfferData, CoinEscrowOffer {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         make_offer<AptosCoin>(sender, token_id, offer_amount, duration)
     }
 
@@ -536,7 +548,7 @@ module lotus::Marketplace {
         sender: &signer,
         token_id: TokenId,
         offer_amount: u64,
-        duration:u64
+        duration: u64
     ) acquires TokenCap, OfferData, CoinEscrowOffer {
         let sender_addr = signer::address_of(sender);
         let market_cap = &borrow_global<TokenCap>(@lotus).cap;
@@ -547,14 +559,19 @@ module lotus::Marketplace {
         let offer_items = &mut offer_data.offer_items;
         let is_contain = table::contains(offer_items, token_id);
 
+        let royalty = token::get_royalty(token_id);
+        let royalty_payee = token::get_royalty_payee(&royalty);
+        let royalty_numerator = token::get_royalty_numerator(&royalty);
+        let royalty_denominator = token::get_royalty_denominator(&royalty);
+
         if(!exists<CoinEscrowOffer<CoinType>>(sender_addr)){
             move_to(sender, CoinEscrowOffer {
                 locked_coins: table::new<TokenId, Coin<CoinType>>()
             })
         };
 
+        // unique offer id
         let guid = account::create_guid(market_signer);
-
         let offer_id = guid::creation_num(&guid);
 
         let started_at = timestamp::now_seconds();
@@ -564,8 +581,8 @@ module lotus::Marketplace {
                 offer_address: sender_addr,
                 timestamp: timestamp::now_seconds(),
                 amount: offer_amount,
-                offer_id: offer_id,
-                started_at: started_at,
+                offer_id,
+                started_at,
                 duration
             };
 
@@ -631,7 +648,7 @@ module lotus::Marketplace {
                     offer_address: sender_addr,
                     timestamp: timestamp::now_seconds(),
                     amount: offer_amount,
-                    offer_id: offer_id,
+                    offer_id,
                     started_at,
                     duration
                 };
@@ -642,29 +659,33 @@ module lotus::Marketplace {
 
         event::emit_event(&mut offer_data.offer_events, OfferEvent {
             id: token_id,
-            offer_id: offer_id,
             offerer: sender_addr,
             amount: offer_amount,
             timestamp: timestamp::now_seconds(),
+            offer_id,
             started_at,
-            duration
+            duration,
+            royalty_payee,
+            royalty_numerator,
+            royalty_denominator 
         })
     }
 
+    // accept offer by token owner.
     public entry fun accept_offer_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64,
         offerer: address,
     ) acquires TokenCap, MarketData, OfferData, CoinEscrowOffer, TokenEscrowOffer {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         accept_offer<AptosCoin>(sender, token_id, offerer)
     }
 
     fun accept_offer<CoinType>(
-        sender:&signer,
+        sender: &signer,
         token_id: TokenId,
         offerer: address,
     ) acquires TokenCap, MarketData, OfferData, CoinEscrowOffer, TokenEscrowOffer {
@@ -697,6 +718,7 @@ module lotus::Marketplace {
 
         // check time can accept
         let can_accept = false;
+        // check offerer
         let offer_id: u64 = 0;
 
         let offerers_length = vector::length(offerers);
@@ -758,14 +780,15 @@ module lotus::Marketplace {
 
     }
 
+    // cancel offer by buyer
     public entry fun cancel_offer_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
-        property_version:u64
+        collection_name: String,
+        token_name: String,
+        property_version: u64
     ) acquires TokenCap, OfferData, CoinEscrowOffer {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         cancel_offer<AptosCoin>(sender, token_id)
     }
 
@@ -795,7 +818,6 @@ module lotus::Marketplace {
             if (_offerer.offer_address == sender_addr){
                 current_offer_id = _offerer.offer_id;
                 vector::remove(offerers, i - 1);
-
                 break
             };
 
@@ -814,14 +836,15 @@ module lotus::Marketplace {
         })
     }
 
+    // claim offer token by buyer(when seller accept offer)
     public entry fun claim_offer_token_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64
     ) acquires TokenCap, OfferData, TokenEscrowOffer {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         claim_offer_token(sender, token_id);
     }
 
@@ -841,6 +864,7 @@ module lotus::Marketplace {
 
         let offer_item = table::borrow_mut(offer_items, token_id);
         let token_id_claim = option::extract(&mut offer_item.token);
+
         assert!(offer_item.claimable_token_address == sender_addr, ERROR_NOT_CLAIMABLE);
         assert!(token_id == token_id_claim, ERROR_NOT_CLAIMABLE);
 
@@ -854,7 +878,6 @@ module lotus::Marketplace {
 
         event::emit_event(&mut offer_data.claim_token_offer_events, ClaimTokenOffer {
             id: token_id,
-            // offer_id: offer_item.offer_id,
             timestamp: timestamp::now_seconds(),
             claimer: sender_addr
         })
@@ -883,8 +906,14 @@ module lotus::Marketplace {
         // sender_addr has received the same token somehow but has not claimed the coins from the initial auction
         assert!(!table::contains(auction_items, token_id), ERROR_CLAIM_COINS_FIRST);
 
+        // create new auction item
         let guid = account::create_guid(market_signer);
         let auction_id = guid::creation_num(&guid);
+
+        let royalty = token::get_royalty(token_id);
+        let royalty_payee = token::get_royalty_payee(&royalty);
+        let royalty_numerator = token::get_royalty_numerator(&royalty);
+        let royalty_denominator = token::get_royalty_denominator(&royalty);
 
         event::emit_event<AuctionEvent>(
             &mut auction_data.auction_events,
@@ -895,7 +924,10 @@ module lotus::Marketplace {
                 auction_id,
                 started_at, 
                 duration,
-                owner_address: sender_addr 
+                owner_address: sender_addr,
+                royalty_payee,
+                royalty_numerator,
+                royalty_denominator
             },
         );
 
@@ -918,13 +950,13 @@ module lotus::Marketplace {
     public entry fun initial_auction_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64,
         min_selling_price: u64,
         duration: u64,
     ) acquires AuctionData, TokenCap {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         initial_auction(sender, token_id, min_selling_price, duration)
     }
 
@@ -946,15 +978,16 @@ module lotus::Marketplace {
         market_signer_address
     }
 
+    // bid by bidder
     public entry fun bid_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64,
         bid: u64,
     ) acquires CoinEscrow, AuctionData, TokenCap {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         bid<AptosCoin>(sender, token_id, bid)
     }
 
@@ -997,7 +1030,7 @@ module lotus::Marketplace {
                 auction_id: auction_item.auction_id,
                 bid,
                 timestamp: timestamp::now_seconds(),
-                bider_address: sender_addr 
+                bidder_address: sender_addr 
             },
         );
 
@@ -1012,11 +1045,11 @@ module lotus::Marketplace {
     public entry fun claim_auction_token_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64
     ) acquires AuctionData, TokenCap, MarketData, CoinEscrow {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         claim_auction_token<AptosCoin>(sender, token_id)
     }
 
@@ -1051,7 +1084,7 @@ module lotus::Marketplace {
                 id: token_id,
                 auction_id: auction_item.auction_id,
                 timestamp: timestamp::now_seconds(),
-                bider_address: sender_addr 
+                bidder_address: sender_addr 
             },
         );
 
@@ -1102,11 +1135,11 @@ module lotus::Marketplace {
     public entry fun claim_auction_coin_script(
         sender: &signer,
         creator: address,
-        collection: String,
-        name: String,
+        collection_name: String,
+        token_name: String,
         property_version: u64
     ) acquires CoinEscrow, AuctionData, TokenCap, MarketData {
-        let token_id = token::create_token_id_raw(creator, collection, name, property_version);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_version);
         claim_auction_coin<AptosCoin>(sender, token_id)
     }
 
@@ -1165,15 +1198,16 @@ module lotus::Marketplace {
 
         coin::deposit<CoinType>(sender_addr, coins);
     }
+
     public entry fun change_token_price_script(
         sender: &signer,
         creator: address,
-        collection: String,
+        collection_name: String,
         token_name: String,
         property_vertion: u64,
         new_price: u64,
     ) acquires ListedItemsData, TokenCap {
-        let token_id = token::create_token_id_raw(creator, collection, token_name, property_vertion);
+        let token_id = token::create_token_id_raw(creator, collection_name, token_name, property_vertion);
         change_token_price(sender, token_id, new_price);
     }
 
