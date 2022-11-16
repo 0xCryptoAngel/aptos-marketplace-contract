@@ -10,24 +10,12 @@ Demo: https://lotus-nft-marketplace.fly.dev
 ```shell
 # create marketplace addr
 aptos init --profile marketplace
-
-# create seller addr
-aptos init --profile seller
-
-# create buyer 1 addr
-aptos init --profile buyer1
-
-# create buyer 2 addr
-aptos init --profile buyer2
 ```
 
 2. Fund with faucet
 ```shell
 # faucet
 aptos account fund-with-faucet --account marketplace
-aptos account fund-with-faucet --account seller
-aptos account fund-with-faucet --account buyer1
-aptos account fund-with-faucet --account buyer2
 ```
 
 3. Compile contract
