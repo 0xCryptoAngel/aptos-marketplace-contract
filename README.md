@@ -2,7 +2,7 @@
 
 Lotus is Explore, collect and sell Arts & NFTs. Base on Aptos blockchain, inspired by Opensea. hatched by NonceGeekDAO.
 
-Demo: https://lotus-nft-marketplace.fly.dev
+Website: https://nftsignal.app
 
 ## **Getting started**
 
