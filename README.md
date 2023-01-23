@@ -1,8 +1,6 @@
-# Lotus NFT Marketplace Contract
+# Aptos NFT Marketplace Contract
 
-Lotus is Explore, collect and sell Arts & NFTs. Base on Aptos blockchain, inspired by Opensea. hatched by NonceGeekDAO.
-
-Website: https://nftsignal.app
+Vexpy is Explore, collect and sell Arts & NFTs. Base on Aptos blockchain, inspired by Opensea. hatched by Tonotice.
 
 ## **Getting started**
 
